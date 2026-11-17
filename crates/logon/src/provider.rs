@@ -415,6 +415,15 @@ pub extern "system" fn DllCanUnloadNow() -> HRESULT {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[implement(ICredentialProviderEvents)]
+    struct EventProbe { called: Arc<AtomicBool> }
+    impl ICredentialProviderEvents_Impl for EventProbe_Impl {
+        fn CredentialsChanged(&self, context: usize) -> Result<()> {
+            if context != 7 { return Err(E_INVALIDARG.into()); }
+            self.called.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
     fn provider() -> ICredentialProvider {
         Provider::create(PublicConfig { agent_public_key: lan_transport::Identity::generate().public_hex(), client_sid: Some("S-1-5-21-1-2-3-1001".into()) }).unwrap()
     }
@@ -457,5 +466,45 @@ mod tests {
             assert!(serialization.rgbSerialization.is_null());
             CoTaskMemFree(Some(text.0.cast()));
         }
+    }
+    #[test]
+    fn background_callback_is_marshaled_to_the_ui_apartment() {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap(); }
+        let called = Arc::new(AtomicBool::new(false));
+        let events: ICredentialProviderEvents = EventProbe { called: called.clone() }.into();
+        let provider = provider();
+        let credential = unsafe { provider.GetCredentialAt(0).unwrap() };
+        let events_stream = marshal(&events).unwrap();
+        let credential_stream = marshal(&credential).unwrap();
+        let worker = std::thread::spawn(move || -> std::result::Result<(), String> {
+            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().map_err(|error| format!("{error:?}"))?; }
+            let result = (|| -> Result<()> {
+                let events: ICredentialProviderEvents = unsafe { unmarshal(events_stream)? };
+                let credential: ICredentialProviderCredential = unsafe { unmarshal(credential_stream)? };
+                let (mut count, mut selected) = (0, 0);
+                unsafe { credential.GetComboBoxValueCount(PLAN, &mut count, &mut selected)?; events.CredentialsChanged(7)?; }
+                if count != 3 { return Err(E_FAIL.into()); }
+                Ok(())
+            })().map_err(|error| format!("{error:?}"));
+            unsafe { CoUninitialize(); }
+            result
+        });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !worker.is_finished() && Instant::now() < deadline {
+            let mut message = MSG::default();
+            unsafe {
+                while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.is_finished(), "Callback COM não retornou para o apartamento de UI.");
+        worker.join().unwrap().unwrap();
+        assert!(called.load(Ordering::Acquire));
+        drop(credential); drop(provider); drop(events);
+        unsafe { CoUninitialize(); }
     }
 }
