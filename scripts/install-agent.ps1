@@ -1,9 +1,10 @@
 # Instalação EXPERIMENTAL. Execute como administrador somente em uma VM de teste.
-# Não cria bloqueio de acesso ao desktop e não altera UAC ou Ctrl+Alt+Del.
+# O modo WindowsGate é provisionado por install-workstation.ps1. Não altera UAC ou Ctrl+Alt+Del.
 param(
     [Parameter(Mandatory = $true)][string]$ClientUser,
     [string]$BuildDirectory = (Join-Path $PSScriptRoot '..\target\debug'),
-    [switch]$StartInterfaceAtLogon
+    [switch]$StartInterfaceAtLogon,
+    [switch]$WindowsGate
 )
 $ErrorActionPreference = 'Stop'
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -20,7 +21,12 @@ $privatePath = Join-Path $privateDir 'private.json'
 if ((Get-Service -Name $name -ErrorAction SilentlyContinue) -or (Test-Path $installDir) -or (Test-Path $privateDir)) {
     throw 'Já existe uma instalação ou diretório reservado. Não será sobrescrito.'
 }
-foreach ($binary in @('lan-agent.exe', 'lan-station.exe')) {
+$binaries = @('lan-agent.exe', 'lan-station.exe')
+if ($WindowsGate) {
+    if ($env:LAN_WINDOWS_GATE -ne '1' -or $env:LAN_WINDOWS_CLIENT_USER -ne $ClientUser -or -not $env:LAN_WINDOWS_CLIENT_PASSWORD) { throw 'Provisionamento da conta dedicada ausente.' }
+    $binaries += 'lan_logon.dll'
+}
+foreach ($binary in $binaries) {
     if (-not (Test-Path (Join-Path $BuildDirectory $binary))) { throw "Executável ausente: $binary. Compile antes de instalar." }
 }
 function Invoke-Sc {
@@ -40,9 +46,11 @@ try {
     Set-DirectoryAcl $privateDir @('*S-1-5-18:(OI)(CI)(F)', '*S-1-5-32-544:(OI)(CI)(F)')
     Copy-Item (Join-Path $BuildDirectory 'lan-agent.exe') $installDir
     Copy-Item (Join-Path $BuildDirectory 'lan-station.exe') $installDir
+    if ($WindowsGate) { Copy-Item (Join-Path $BuildDirectory 'lan_logon.dll') $installDir }
     $agent = Join-Path $installDir 'lan-agent.exe'
     $binaryPath = '"' + $agent + '" --service "' + $privatePath + '"'
-    Invoke-Sc create $name 'binPath=' $binaryPath 'start=' auto 'obj=' 'NT AUTHORITY\LocalService' 'DisplayName=' 'Comunicação LAN - Agente experimental'
+    $account = if ($WindowsGate) { 'LocalSystem' } else { 'NT AUTHORITY\LocalService' }
+    Invoke-Sc create $name 'binPath=' $binaryPath 'start=' auto 'obj=' $account 'DisplayName=' 'Comunicação LAN - Agente experimental'
     $createdService = $true
     Invoke-Sc sidtype $name unrestricted
     $sidOutput = & "$env:SystemRoot\System32\sc.exe" showsid $name
@@ -66,9 +74,9 @@ try {
         $taskPrincipal = New-ScheduledTaskPrincipal -UserId $client.SID.Value -LogonType Interactive -RunLevel Limited
         $null = Register-ScheduledTask -TaskName 'ComunicacaoLanStation' -Action $action -Trigger $trigger -Principal $taskPrincipal
     }
-    Write-Host 'Agente experimental instalado como LocalService, com credenciais protegidas.'
+    Write-Host ('Agente instalado como ' + $account + ', com credenciais protegidas.')
     Write-Host ('Interface (execute na conta de cliente): ' + (Join-Path $installDir 'lan-station.exe'))
-    Write-Host 'A proteção de acesso ao desktop ainda não está implementada.'
+    if (-not $WindowsGate) { Write-Host 'Modo visual: não bloqueia o desktop. Use install-workstation.ps1 para entrada Windows.' }
 } catch {
     if ($createdService) {
         Stop-Service $name -ErrorAction SilentlyContinue

@@ -43,6 +43,7 @@ struct Controller {
     // Somente streams COM marshaled atravessam threads; interfaces não são Send.
     credential_events: Mutex<Option<(usize, usize, u64)>>,
     generation: AtomicU64,
+    offered: AtomicBool,
 }
 impl Controller {
     fn new(config: PublicConfig) -> Result<Arc<Self>> {
@@ -51,7 +52,7 @@ impl Controller {
         Ok(Arc::new(Self { public: config.agent_public_key, sid, cache: Mutex::new(Cache::default()),
             command: Mutex::new(None), selected: AtomicBool::new(false), auto_pending: AtomicBool::new(false),
             attempted: AtomicU64::new(u64::MAX), scenario: AtomicU32::new(0), alive: Mutex::new(None),
-            credential_events: Mutex::new(None), generation: AtomicU64::new(0) }))
+            credential_events: Mutex::new(None), generation: AtomicU64::new(0), offered: AtomicBool::new(true) }))
     }
     fn snapshot(&self) -> Cache { self.cache.lock().map(|cache| cache.clone()).unwrap_or_default() }
     fn stop(&self) {
@@ -181,6 +182,7 @@ fn poll_controller(controller: Arc<Controller>, events_raw: usize, context: usiz
                     }
                 }
             }
+            if !cache.active() { controller.auto_pending.store(false, Ordering::Release); }
             if cache.active() && controller.selected.load(Ordering::Acquire)
                 && controller.attempted.load(Ordering::Acquire) != cache.revision
                 && !controller.auto_pending.swap(true, Ordering::AcqRel) {
@@ -194,7 +196,7 @@ fn poll_controller(controller: Arc<Controller>, events_raw: usize, context: usiz
     unsafe { CoUninitialize(); }
 }
 
-#[implement(ICredentialProvider)]
+#[implement(ICredentialProvider, ICredentialProviderSetUserArray)]
 struct Provider { controller: Arc<Controller>, credential: ICredentialProviderCredential }
 impl Provider {
     fn create(config: PublicConfig) -> Result<ICredentialProvider> {
@@ -204,6 +206,21 @@ impl Provider {
     }
 }
 impl Drop for Provider { fn drop(&mut self) { self.controller.stop(); } }
+impl ICredentialProviderSetUserArray_Impl for Provider_Impl {
+    fn SetUserArray(&self, users: Ref<'_, ICredentialProviderUserArray>) -> Result<()> {
+        let users = users.as_ref().ok_or_else(|| Error::from(E_POINTER))?;
+        let mut offered = false;
+        unsafe {
+            for index in 0..users.GetCount()? {
+                let sid = users.GetAt(index)?.GetSid()?;
+                offered |= sid.to_string().ok().as_deref() == Some(self.controller.sid.as_str());
+                CoTaskMemFree(Some(sid.0.cast()));
+            }
+        }
+        self.controller.offered.store(offered, Ordering::Release);
+        Ok(())
+    }
+}
 impl ICredentialProvider_Impl for Provider_Impl {
     fn SetUsageScenario(&self, scenario: CREDENTIAL_PROVIDER_USAGE_SCENARIO, _flags: u32) -> Result<()> {
         if scenario != CPUS_LOGON && scenario != CPUS_UNLOCK_WORKSTATION { return Err(E_NOTIMPL.into()); }
@@ -237,12 +254,13 @@ impl ICredentialProvider_Impl for Provider_Impl {
     }
     fn GetCredentialCount(&self, count: *mut u32, default: *mut u32, auto: *mut BOOL) -> Result<()> {
         if count.is_null() || default.is_null() || auto.is_null() { return Err(E_POINTER.into()); }
-        let selected = self.controller.selected.load(Ordering::Acquire);
-        unsafe { *count = 1; *default = if selected { 0 } else { u32::MAX }; *auto = (selected && self.controller.snapshot().active() && self.controller.auto_pending.load(Ordering::Acquire)).into(); }
+        let offered = self.controller.offered.load(Ordering::Acquire);
+        let selected = offered && self.controller.selected.load(Ordering::Acquire);
+        unsafe { *count = u32::from(offered); *default = if selected { 0 } else { u32::MAX }; *auto = (selected && self.controller.snapshot().active() && self.controller.auto_pending.load(Ordering::Acquire)).into(); }
         Ok(())
     }
     fn GetCredentialAt(&self, index: u32) -> Result<ICredentialProviderCredential> {
-        if index != 0 { return Err(E_INVALIDARG.into()); }
+        if index != 0 || !self.controller.offered.load(Ordering::Acquire) { return Err(E_INVALIDARG.into()); }
         Ok(self.credential.clone())
     }
 }

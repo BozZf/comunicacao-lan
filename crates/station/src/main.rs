@@ -285,9 +285,12 @@ fn main() -> eframe::Result {
         #[cfg(not(windows))]
         { eprintln!("Modo de serviço disponível somente no Windows. Use --demo para demonstração direta."); return Ok(()); }
     };
+    let demo = matches!(&mode, ConnectionMode::Demo(_));
+    let mut viewport = egui::ViewportBuilder::default().with_title("Comunicação LAN · Tempo de uso")
+        .with_inner_size([560.0, 650.0]).with_fullscreen(demo);
+    if demo { viewport = viewport.with_always_on_top(); }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Comunicação LAN · demonstração")
-            .with_fullscreen(true).with_always_on_top(),
+        viewport,
         ..Default::default()
     };
     eframe::run_native("Comunicação LAN", options, Box::new(move |creation| {

@@ -1,4 +1,5 @@
 # CI/VM isolada: cria duas contas temporárias, instala, testa e remove o serviço.
+param([switch]$WindowsGate)
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 $suffix = [guid]::NewGuid().ToString('N').Substring(0, 6)
@@ -37,7 +38,7 @@ function Run-AsClient($Executable, $Arguments, $UserCredential) {
     $err = $out + '.err'
     # Processos de teste da conta cliente não podem herdar os segredos da sessão administrativa.
     $saved = @{}
-    foreach ($key in @('LAN_ADMIN_TOKEN', 'LAN_STATION_TOKEN', 'LAN_SERVER_SIGNING_KEY', 'LAN_SERVER_PUBLIC_KEY', 'LAN_DEMO_PAYMENTS', 'LAN_DB')) {
+    foreach ($key in @('LAN_ADMIN_TOKEN', 'LAN_STATION_TOKEN', 'LAN_SERVER_SIGNING_KEY', 'LAN_SERVER_PUBLIC_KEY', 'LAN_DEMO_PAYMENTS', 'LAN_DB', 'LAN_WINDOWS_CLIENT_PASSWORD', 'LAN_WINDOWS_CLIENT_USER', 'LAN_WINDOWS_GATE')) {
         $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
         [Environment]::SetEnvironmentVariable($key, $null, 'Process')
     }
@@ -73,7 +74,15 @@ try {
         [Environment]::SetEnvironmentVariable($parts[0], $parts[1], 'Process')
     }
     $server = Start-Backend
-    & './scripts/install-agent.ps1' -ClientUser $clientUser
+    if ($WindowsGate) {
+        $env:LAN_WINDOWS_GATE = '1'
+        $env:LAN_WINDOWS_CLIENT_USER = $clientUser
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($password)
+        try { $env:LAN_WINDOWS_CLIENT_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+    & './scripts/install-agent.ps1' -ClientUser $clientUser -WindowsGate:$WindowsGate
+    Remove-Item Env:LAN_WINDOWS_CLIENT_PASSWORD -ErrorAction SilentlyContinue
     $installed = $true
     $status = Wait-Online
     if ($status.session.remaining_seconds -ne 0) { throw 'Agente iniciou com crédito indevido.' }
@@ -99,6 +108,8 @@ try {
     }
     if ($status.session.revision -ne 1 -or $status.session.remaining_seconds -le 0) { throw 'Pagamento não chegou ao serviço.' }
     # Cada probe é um processo novo. O prazo pertence ao serviço, não à interface.
+    $deniedCredentials = Run-AsClient $agent @('--probe', '--check-logon-denied') $credential
+    if ($deniedCredentials.ExitCode -ne 0) { throw 'Serialização reservada ao Windows acessível ao cliente.' }
     $before = $status.session.remaining_seconds
     Stop-Process -Id $server.Id
     $server.WaitForExit()
@@ -120,5 +131,5 @@ try {
     Remove-LocalUser -Name $otherUser -ErrorAction SilentlyContinue
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $env:LAN_DB, ($env:LAN_DB + '-wal'), ($env:LAN_DB + '-shm') -ErrorAction SilentlyContinue
-    Remove-Item Env:LAN_ADMIN_TOKEN, Env:LAN_STATION_TOKEN, Env:LAN_DEMO_PAYMENTS, Env:LAN_DB, Env:LAN_SERVER_SIGNING_KEY, Env:LAN_SERVER_PUBLIC_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:LAN_ADMIN_TOKEN, Env:LAN_STATION_TOKEN, Env:LAN_DEMO_PAYMENTS, Env:LAN_DB, Env:LAN_SERVER_SIGNING_KEY, Env:LAN_SERVER_PUBLIC_KEY, Env:LAN_WINDOWS_GATE, Env:LAN_WINDOWS_CLIENT_USER, Env:LAN_WINDOWS_CLIENT_PASSWORD -ErrorAction SilentlyContinue
 }

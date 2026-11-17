@@ -2,7 +2,7 @@
 use crate::{PrivateConfig, WorkstationConfig};
 use comunicacao_lan::lease::Lease;
 use lan_transport::{Action, LogonSerialization, Reply};
-use std::{ffi::c_void, path::Path, time::{Duration, Instant}};
+use std::{path::Path, time::{Duration, Instant}};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, LocalFree},
     Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
@@ -132,10 +132,10 @@ struct Interactive { message: i32, domain: Unicode, user: Unicode, password: Uni
 #[repr(C)]
 struct Unlock { logon: Interactive, luid: [u32; 2] }
 
-fn pack(user: &str, protected: &[u16], unlock: bool) -> Result<Zeroizing<Vec<u8>>, String> {
+fn pack(domain: &str, user: &str, protected: &[u16], unlock: bool) -> Result<Zeroizing<Vec<u8>>, String> {
     let mut bytes = Zeroizing::new(vec![0; std::mem::size_of::<Unlock>()]);
     bytes[..4].copy_from_slice(&(if unlock { 7i32 } else { 2i32 }).to_le_bytes());
-    let domain: Vec<u16> = ".".encode_utf16().collect();
+    let domain: Vec<u16> = domain.encode_utf16().collect();
     let user: Vec<u16> = user.encode_utf16().collect();
     for (offset, text) in [(std::mem::offset_of!(Interactive, domain), domain.as_slice()),
         (std::mem::offset_of!(Interactive, user), user.as_slice()),
@@ -156,7 +156,8 @@ pub fn serialize(config: &PrivateConfig, unlock: bool) -> Result<LogonSerializat
     let gate = config.workstation.as_ref().ok_or("Entrada do Windows não configurada.")?;
     let secret = password(gate)?;
     let protected = protected_windows_password(&secret)?;
-    let packed = pack(&gate.local_user, &protected, unlock)?;
+    let domain = std::env::var("COMPUTERNAME").map_err(|_| "Nome do computador indisponível.")?;
+    let packed = pack(&domain, &gate.local_user, &protected, unlock)?;
     let mut handle = std::ptr::null_mut();
     if unsafe { LsaConnectUntrusted(&mut handle) } < 0 { return Err("Não foi possível consultar a autenticação do Windows.".into()); }
     let mut name_bytes = b"Negotiate".to_vec();
@@ -213,7 +214,7 @@ mod tests {
     use super::*;
     #[test]
     fn serialized_strings_are_offsets_and_header_padding_is_zero() {
-        let packed = pack("LanCliente", &[65, 66], true).unwrap();
+        let packed = pack("MACHINE", "LanCliente", &[65, 66], true).unwrap();
         assert_eq!(i32::from_le_bytes(packed[..4].try_into().unwrap()), 7);
         let pointer = std::mem::offset_of!(Interactive, user) + std::mem::offset_of!(Unicode, buffer);
         let offset = usize::from_le_bytes(packed[pointer..pointer + std::mem::size_of::<usize>()].try_into().unwrap());

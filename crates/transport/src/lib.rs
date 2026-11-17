@@ -158,7 +158,7 @@ pub async fn call(public: &str, action: Action) -> Result<Reply, String> {
         };
         let bytes = serde_json::to_vec(&request).map_err(|_| "Consulta inválida.")?;
         write_frame(&mut client, &bytes, MAX_REQUEST).await.map_err(|_| "Falha ao consultar serviço.")?;
-        let bytes = read_frame(&mut client, MAX_FRAME).await.map_err(|_| "Resposta inválida do serviço.")?;
+        let bytes = zeroize::Zeroizing::new(read_frame(&mut client, MAX_FRAME).await.map_err(|_| "Resposta inválida do serviço.")?);
         let reply = serde_json::from_slice(&bytes).map_err(|_| "Resposta inválida do serviço.")?;
         verify(public, &request.nonce, reply)
     };
