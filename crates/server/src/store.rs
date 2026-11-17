@@ -128,8 +128,11 @@ impl Store {
 
 fn order_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OrderView> {
     let id: String = row.get(0)?;
+    use crate::payments::PaymentGateway;
+    let display = crate::payments::SimulatedPix.display(&id);
     Ok(OrderView {
-        qr_payload: format!("LAN-DEMO:{id}"), id, amount_cents: row.get(1)?,
+        qr_payload: display.payload, payment_provider: display.provider, payment_notice: display.notice,
+        id, amount_cents: row.get(1)?,
         duration_seconds: row.get(2)?, status: row.get(3)?, expires_at: row.get(4)?,
     })
 }

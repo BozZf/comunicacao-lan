@@ -6,7 +6,7 @@ publish = false
 description = "Núcleo de sessões de uma lan house com pagamento por tempo"
 
 [workspace]
-members = ["crates/server", "crates/station", "crates/transport", "crates/agent"]
+members = ["crates/server", "crates/station", "crates/transport", "crates/agent", "crates/logon"]
 resolver = "2"
 
 [dependencies]

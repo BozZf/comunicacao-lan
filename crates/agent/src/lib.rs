@@ -6,6 +6,8 @@ use tokio::sync::Mutex;
 
 #[cfg(windows)]
 pub mod windows;
+#[cfg(windows)]
+pub mod workstation;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +17,14 @@ pub struct PrivateConfig {
     pub agent_signing_secret: String,
     pub client_sid: String,
     pub service_sid: String,
+    #[serde(default)] pub workstation: Option<WorkstationConfig>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkstationConfig {
+    pub local_user: String,
+    /// DPAPI protegido por máquina, dentro de diretório privado por ACL.
+    pub protected_password: String,
 }
 impl PrivateConfig {
     pub fn validate(&self) -> Result<(), String> {
@@ -26,6 +36,13 @@ impl PrivateConfig {
         Identity::from_secret(&self.agent_signing_secret)?;
         if !valid_sid_text(&self.client_sid) { return Err("SID de cliente inválido.".into()); }
         if !self.service_sid.starts_with("S-1-5-80-") || !valid_sid_text(&self.service_sid) { return Err("SID de serviço inválido.".into()); }
+        if let Some(workstation) = &self.workstation {
+            if workstation.local_user.is_empty() || workstation.local_user.len() > 20
+                || !workstation.local_user.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                || workstation.protected_password.is_empty() || workstation.protected_password.len() > 8192 {
+                return Err("Configuração de entrada Windows inválida.".into());
+            }
+        }
         Ok(())
     }
 }
@@ -43,6 +60,8 @@ pub struct AgentState {
     catalog: Vec<Plan>,
     last_online: Option<Instant>,
     message: Option<String>,
+    pub workstation: bool,
+    pub instance: String,
 }
 impl Default for AgentState {
     fn default() -> Self {
@@ -50,6 +69,7 @@ impl Default for AgentState {
             started: Instant::now(), lease: Lease::default(), catalog: Vec::new(),
             session: SessionView { machine_id: "PC-01".into(), remaining_seconds: 0, revision: 0, pending_order: None },
             last_online: None, message: Some("Aguardando autorização assinada do servidor.".into()),
+            workstation: false, instance: uuid::Uuid::new_v4().to_string(),
         }
     }
 }
@@ -58,7 +78,13 @@ impl AgentState {
     pub fn status(&self) -> Reply {
         let mut session = self.session.clone();
         session.remaining_seconds = self.lease.remaining(self.started.elapsed()).as_secs();
-        Reply::Status { session, online: self.online(), message: self.message.clone() }
+        Reply::Status { session, online: self.online(), message: self.message.clone(), workstation: self.workstation }
+    }
+    pub fn authorized(&self) -> bool { !self.lease.remaining(self.started.elapsed()).is_zero() }
+    pub fn watchdog_status(&self) -> Reply {
+        let mut session = self.session.clone();
+        session.remaining_seconds = self.lease.remaining(self.started.elapsed()).as_secs();
+        Reply::Watchdog { session, instance: self.instance.clone() }
     }
     fn apply(&mut self, session: SessionView, latency: Duration) -> Result<(), String> {
         if session.machine_id != "PC-01" { return Err("Autorização para outra máquina rejeitada.".into()); }
@@ -138,6 +164,7 @@ pub async fn handle(action: Action, backend: &Backend, state: &Shared) -> Reply 
                 _ => Reply::Failure { message: "Não foi possível criar a cobrança. Aguarde a atualização do estado.".into() },
             }
         }
+        Action::SerializeLogon { .. } | Action::Watchdog => Reply::Failure { message: "Operação reservada ao Windows.".into() },
     }
 }
 

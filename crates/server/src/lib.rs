@@ -1,4 +1,5 @@
 pub mod store;
+pub mod payments;
 
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
@@ -147,12 +148,13 @@ async fn agent_rpc(State(state): State<Shared>, headers: HeaderMap, Json(request
     let signer = state.config.agent_signer.as_ref().ok_or(ApiError(StatusCode::SERVICE_UNAVAILABLE, "Assinatura do servidor não configurada."))?;
     request.validate().map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Consulta inválida."))?;
     let reply = match request.action {
-        Action::Status => Reply::Status { session: with_store(&state, |store, now| store.session(now))?, online: true, message: None },
+        Action::Status => Reply::Status { session: with_store(&state, |store, now| store.session(now))?, online: true, message: None, workstation: false },
         Action::Catalog => Reply::Catalog { plans: demo_catalog() },
         Action::Buy { plan_id } => {
             with_store(&state, |store, now| store.create_order(&plan_id, now))?;
             Reply::OrderCreated
         }
+        Action::SerializeLogon { .. } | Action::Watchdog => return Err(ApiError(StatusCode::FORBIDDEN, "Operação local do Windows.")),
     };
     Ok(Json(signer.sign(&request.nonce, reply).map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Falha ao assinar resposta."))?))
 }

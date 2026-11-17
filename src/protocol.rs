@@ -34,6 +34,8 @@ pub struct OrderView {
     pub status: String,
     pub expires_at: i64,
     pub qr_payload: String,
+    #[serde(default)] pub payment_provider: String,
+    #[serde(default)] pub payment_notice: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

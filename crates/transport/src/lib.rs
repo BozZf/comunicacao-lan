@@ -2,6 +2,7 @@
 use comunicacao_lan::protocol::{Plan, SessionView};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const PIPE_NAME: &str = r"\\.\pipe\ComunicacaoLan.Agent.v1";
 pub const MAX_FRAME: usize = 64 * 1024;
@@ -13,6 +14,10 @@ pub enum Action {
     Status,
     Catalog,
     Buy { plan_id: String },
+    /// Somente o LogonUI/SYSTEM pode solicitar serialização de entrada.
+    SerializeLogon { unlock: bool },
+    /// Canal do processo supervisor, também restrito a SYSTEM.
+    Watchdog,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -38,21 +43,34 @@ impl Request {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
-    Status { session: SessionView, online: bool, message: Option<String> },
+    Status { session: SessionView, online: bool, message: Option<String>, #[serde(default)] workstation: bool },
     Catalog { plans: Vec<Plan> },
     OrderCreated,
     Failure { message: String },
+    Serialized { credentials: Box<LogonSerialization> },
+    Watchdog { session: SessionView, instance: String },
+}
+
+#[derive(Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
+#[serde(deny_unknown_fields)]
+pub struct LogonSerialization { pub buffer_hex: String, pub package: u32 }
+impl std::fmt::Debug for LogonSerialization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("LogonSerialization([REDACTED])") }
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Payload { nonce: String, reply: Reply }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignedReply {
     pub payload: String,
     pub signature: String,
+}
+impl Drop for SignedReply { fn drop(&mut self) { self.payload.zeroize(); } }
+impl std::fmt::Debug for SignedReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("SignedReply([REDACTED])") }
 }
 
 #[derive(Clone)]
@@ -85,7 +103,7 @@ pub fn verify(public: &str, nonce: &str, signed: SignedReply) -> Result<Reply, S
     }
     let key = validate_public_key(public)?;
     let mut signature = [0; 64];
-    hex::decode_to_slice(signed.signature, &mut signature).map_err(|_| "Assinatura inválida.")?;
+    hex::decode_to_slice(&signed.signature, &mut signature).map_err(|_| "Assinatura inválida.")?;
     key.verify_strict(signed.payload.as_bytes(), &Signature::from_bytes(&signature))
         .map_err(|_| "Assinatura inválida.")?;
     let payload: Payload = serde_json::from_str(&signed.payload).map_err(|_| "Resposta inválida.")?;
@@ -95,7 +113,10 @@ pub fn verify(public: &str, nonce: &str, signed: SignedReply) -> Result<Reply, S
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PublicConfig { pub agent_public_key: String }
+pub struct PublicConfig {
+    pub agent_public_key: String,
+    #[serde(default)] pub client_sid: Option<String>,
+}
 
 pub fn installed_public_key() -> Result<String, String> {
     let path = std::env::current_exe().map_err(|_| "Localização do aplicativo inválida.")?

@@ -10,7 +10,7 @@ const SERVER: &str = "http://127.0.0.1:8787";
 enum Command { Buy(String) }
 enum Update {
     Catalog(Vec<Plan>),
-    Session(SessionView, Instant, Duration, bool, Option<String>),
+    Session(SessionView, Instant, Duration, bool, Option<String>, bool),
     Failure(String),
 }
 
@@ -39,7 +39,7 @@ fn demo_worker(token: String, commands: Receiver<Command>, updates: SyncSender<U
             .and_then(|r| r.error_for_status()).and_then(|r| r.json::<SessionView>()) {
             Ok(session) if session.machine_id == "PC-01" => {
                 let received = Instant::now();
-                send(&updates, Update::Session(session, received, received.duration_since(requested), true, None));
+                send(&updates, Update::Session(session, received, received.duration_since(requested), true, None, false));
             }
             Ok(_) => send(&updates, Update::Failure("Resposta para outra máquina rejeitada.".into())),
             Err(_) => send(&updates, Update::Failure("Sem conexão. O tempo já autorizado continua contando localmente.".into())),
@@ -96,9 +96,9 @@ fn agent_worker(public: String, commands: Receiver<Command>, updates: SyncSender
         }
         let requested = Instant::now();
         match runtime.block_on(lan_transport::call(&public, Action::Status)) {
-            Ok(Reply::Status { session, online, message }) => {
+            Ok(Reply::Status { session, online, message, workstation }) => {
                 let received = Instant::now();
-                send(&updates, Update::Session(session, received, received.duration_since(requested), online, message));
+                send(&updates, Update::Session(session, received, received.duration_since(requested), online, message, workstation));
             }
             _ => send(&updates, Update::Failure("Agente indisponível ou assinatura inválida. Sem autorização nova.".into())),
         }
@@ -130,6 +130,7 @@ struct StationApp {
     last_revision: u64,
     active_view: bool,
     waiting_for_order: bool,
+    workstation: bool,
 }
 
 impl StationApp {
@@ -141,7 +142,7 @@ impl StationApp {
             started: Instant::now(), lease: Lease::default(), updates: update_rx,
             commands: command_tx, catalog: Vec::new(), pending: None, qr: None,
             connection_error: None, last_contact: None, warning: None,
-            last_revision: 0, active_view: false, waiting_for_order: false,
+            last_revision: 0, active_view: false, waiting_for_order: false, workstation: false,
         }
     }
 
@@ -150,7 +151,8 @@ impl StationApp {
             match update {
                 Update::Catalog(catalog) => self.catalog = catalog,
                 Update::Failure(error) => { self.connection_error = Some(error); self.waiting_for_order = false; }
-                Update::Session(session, received, round_trip, online, message) => {
+                Update::Session(session, received, round_trip, online, message, workstation) => {
+                    self.workstation = workstation;
                     self.lease.apply(&session, self.started.elapsed(), round_trip.saturating_add(received.elapsed()));
                     if session.revision > self.last_revision {
                         self.warning = None;
@@ -176,7 +178,7 @@ impl StationApp {
             ui.strong("Aguardando pagamento simulado");
             ui.label(format!("R$ {:.2} · cobrança {}", order.amount_cents as f64 / 100.0, order.id));
             if let Some(qr) = &self.qr { draw_qr(ui, qr); }
-            ui.label("QR DE DEMONSTRAÇÃO — NÃO É PIX");
+            ui.label("PIX DE TESTE — NENHUM VALOR É COBRADO");
             ui.label("O código identifica a cobrança. A confirmação é feita no painel do atendente durante este teste.");
             ui.label("Esta cobrança expira em 10 minutos após a criação.");
         } else {
@@ -204,8 +206,8 @@ impl eframe::App for StationApp {
         let active = !remaining.is_zero();
         if active != self.active_view {
             self.active_view = active;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!active));
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if active { egui::WindowLevel::Normal } else { egui::WindowLevel::AlwaysOnTop }));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!active && !self.workstation));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if active || self.workstation { egui::WindowLevel::Normal } else { egui::WindowLevel::AlwaysOnTop }));
             if active { ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(560.0, 650.0))); }
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
@@ -219,25 +221,30 @@ impl eframe::App for StationApp {
                     ui.set_max_width(700.0);
                     ui.add_space(24.0);
                     ui.label(egui::RichText::new("COMUNICAÇÃO LAN · PC-01").size(24.0).color(egui::Color32::from_rgb(97, 221, 191)));
-                    ui.colored_label(egui::Color32::YELLOW, "DEMONSTRAÇÃO — esta janela ainda não protege o Windows.");
+                    if self.workstation {
+                        ui.label("Acesso controlado pela entrada do Windows · Pix de teste");
+                    } else {
+                        ui.colored_label(egui::Color32::YELLOW, "Modo de demonstração visual — sem bloqueio do Windows.");
+                    }
                     ui.add_space(20.0);
                     if active {
                         let seconds = remaining.as_secs().saturating_add(u64::from(remaining.subsec_nanos() > 0));
                         ui.heading("Sessão autorizada");
                         ui.label(egui::RichText::new(format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)).size(40.0));
-                        ui.label("A tela de compra retorna automaticamente quando o tempo acaba.");
+                        ui.label("Renove antes de terminar para manter sua sessão em uso.");
                         if let Some(warning) = &self.warning { ui.colored_label(egui::Color32::YELLOW, warning); }
                         ui.add_space(16.0);
                         ui.separator();
                         ui.label("Renovar adiciona tempo à sessão atual.");
                     } else {
-                        ui.heading("Sem sessão ativa");
+                        ui.heading("Tempo encerrado");
+                        if self.workstation { ui.label("O Windows bloqueará a sessão. A compra estará disponível na opção Comunicação LAN da tela de entrada."); }
                     }
                     self.purchase(ui);
                     ui.add_space(20.0);
                     if let Some(error) = &self.connection_error { ui.colored_label(egui::Color32::YELLOW, error); }
                     ui.separator();
-                    ui.small("Fechar esta janela não encerra um agente instalado. A proteção de acesso do Windows ainda não foi implementada.");
+                    ui.small("Fechar este acompanhamento não encerra a contagem. No modo de entrada Windows, o serviço continua controlando o acesso.");
                 });
             });
         });
