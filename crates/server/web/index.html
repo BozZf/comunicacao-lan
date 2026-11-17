@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LAN · Painel do atendente</title>
+  <link rel="stylesheet" href="/style.css"><script src="/panel.js" defer></script>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">COMUNICAÇÃO LAN / PROTÓTIPO LOCAL</div>
+    <h1>Painel do atendente</h1>
+    <p class="notice">Simulação: nenhum Pix é cobrado. O aplicativo da estação demonstra o fluxo e ainda não protege o Windows.</p>
+    <form id="login">
+      <label for="token">Token do atendente</label>
+      <div class="login-row"><input id="token" type="password" autocomplete="off" required minlength="32"><button>Conectar</button><button type="button" id="logout">Sair</button></div>
+      <p class="muted">A credencial fica somente na memória desta página.</p>
+    </form>
+    <p id="message" role="status" aria-live="polite">Conecte para acompanhar a estação.</p>
+    <section aria-labelledby="station-title"><h2 id="station-title">Estação</h2><div id="station">—</div></section>
+    <section aria-labelledby="orders-title"><h2 id="orders-title">Cobranças de demonstração</h2><div id="orders">—</div></section>
+  </main>
+</body>
+</html>

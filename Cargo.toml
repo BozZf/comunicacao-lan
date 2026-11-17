@@ -5,4 +5,9 @@ edition = "2021"
 publish = false
 description = "Núcleo de sessões de uma lan house com pagamento por tempo"
 
+[workspace]
+members = ["crates/server", "crates/station"]
+resolver = "2"
+
 [dependencies]
+serde = { version = "1", features = ["derive"] }

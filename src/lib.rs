@@ -4,6 +4,9 @@
 
 use std::collections::HashMap;
 
+pub mod lease;
+pub mod protocol;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     InvalidOrder,
