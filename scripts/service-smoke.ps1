@@ -35,8 +35,18 @@ function Start-Backend {
 function Run-AsClient($Executable, $Arguments, $UserCredential) {
     $out = Join-Path $work ([guid]::NewGuid().ToString('N') + '.out')
     $err = $out + '.err'
-    $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $installDir `
-        -Credential $UserCredential -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+    # Processos de teste da conta cliente não podem herdar os segredos da sessão administrativa.
+    $saved = @{}
+    foreach ($key in @('LAN_ADMIN_TOKEN', 'LAN_STATION_TOKEN', 'LAN_SERVER_SIGNING_KEY', 'LAN_SERVER_PUBLIC_KEY', 'LAN_DEMO_PAYMENTS', 'LAN_DB')) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+        [Environment]::SetEnvironmentVariable($key, $null, 'Process')
+    }
+    try {
+        $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -WorkingDirectory $installDir `
+            -Credential $UserCredential -RedirectStandardOutput $out -RedirectStandardError $err -Wait -PassThru
+    } finally {
+        foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], 'Process') }
+    }
     return @{ ExitCode = $process.ExitCode; Output = (Get-Content $out -Raw -ErrorAction SilentlyContinue); Error = (Get-Content $err -Raw -ErrorAction SilentlyContinue) }
 }
 function Probe {

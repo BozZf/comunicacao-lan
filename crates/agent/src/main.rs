@@ -54,5 +54,5 @@ fn write_new(path: &str, bytes: &[u8]) -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new().create_new(true).write(true).open(path)
         .map_err(|_| "Não foi possível criar configuração. Não sobrescreva uma instalação existente.")?;
     file.write_all(bytes).map_err(|_| "Falha ao gravar configuração.")?;
-    file.sync_all().map_err(|_| "Falha ao persistir configuração.")
+    file.sync_all().map_err(|_| "Falha ao persistir configuração.".into())
 }
