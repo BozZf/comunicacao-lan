@@ -16,7 +16,10 @@ Protótipo em Rust para compra de tempo em uma lan house Windows 10/11 Pro.
 **Não há Pix real nem bloqueio seguro do Windows nesta versão.** O QR contém
 `LAN-DEMO:<id>` e não pode ser pago. A janela retorna à compra ao acabar o tempo,
 mas pode ser fechada ou contornada. Não instalar como controle de uma lan house.
-Não há serviço Windows, configuração de quiosque, limpeza do perfil ou instalador.
+Há um serviço Windows experimental com instalação separada e RPC assinado.
+Ele mantém o prazo independente da interface, mas ainda não revoga acesso ao
+desktop. Não há configuração de quiosque nem limpeza do perfil. Veja
+[instalação do agente](docs/windows-agent.md).
 
 O servidor escuta somente em `127.0.0.1:8787`. A demonstração é de uma máquina;
 servidor, painel e estação devem rodar no mesmo PC. Não expor por proxy/túnel.
@@ -58,7 +61,7 @@ Depois de extrair mantendo a estrutura de pastas, execute:
 Para rodar os executáveis separadamente, configure `LAN_ADMIN_TOKEN` e
 `LAN_STATION_TOKEN` com valores distintos de pelo menos 32 caracteres, e defina
 `LAN_DEMO_PAYMENTS=1` **somente para simulação**. Inicie `lan-server` e depois
-`lan-station`, com a mesma credencial de estação. `LAN_DB` escolhe o arquivo SQLite.
+`lan-station --demo`, com a mesma credencial de estação. `LAN_DB` escolhe o arquivo SQLite.
 O servidor pode iniciar sem a flag de simulação, mas não haverá nenhum meio de
 confirmar pagamentos nesta versão. A rota de simulação recusa operações nesse caso.
 
@@ -70,7 +73,9 @@ confirmar pagamentos nesta versão. A rota de simulação recusa operações nes
 | `src/protocol.rs` | Contratos compartilhados e catálogo fictício |
 | `src/lease.rs` | Contagem monotônica usada pela estação |
 | `crates/server` | API Axum, SQLite transacional e painel web |
-| `crates/station` | Aplicativo nativo e consultas autenticadas ao servidor |
+| `crates/station` | Interface nativa: agente instalado por padrão ou `--demo` direto |
+| `crates/agent` | Serviço Windows LocalService e RPC restrito |
+| `crates/transport` | Assinaturas Ed25519, desafios por consulta e framing local |
 | `scripts/demo.ps1` | Inicialização local no Windows |
 | `scripts/smoke.ps1` | Teste HTTP real com reinício do servidor |
 
@@ -81,16 +86,16 @@ duração ou identificador de máquina para autorizar a sessão.
 ## Verificação
 
 ```powershell
-cargo test -p comunicacao-lan -p lan-server --all-targets
-cargo build -p lan-server -p lan-station
+cargo test -p comunicacao-lan -p lan-server -p lan-transport -p lan-agent --all-targets
+cargo build -p lan-server -p lan-station -p lan-agent
 .\scripts\smoke.ps1
 ```
 
-Os testes cobrem domínio, avisos, contagem offline, latência, respostas antigas,
+Os testes cobrem assinaturas, nonce, operações permitidas, domínio, avisos, contagem offline, latência, respostas antigas,
 renovação, rollback de transação, expiração da cobrança, autenticação, origem,
 Host, persistência e confirmação repetida depois de reiniciar.
 O CI executa testes de backend em Windows e Linux, compila o aplicativo no Windows
- e faz o teste HTTP. Compilar não comprova o comportamento gráfico: o roteiro
+e faz o teste HTTP e a instalação/recuperação do serviço sob contas locais temporárias. Compilar não comprova o comportamento gráfico: o roteiro
 manual acima precisa ser executado em uma VM Windows Pro com sessão interativa.
 
 ## Limites de segurança e recuperação
@@ -108,16 +113,20 @@ manual acima precisa ser executado em uma VM Windows Pro com sessão interativa.
 - Se iniciar sem rede, não recupera crédito offline; precisa reconectar.
 - O tempo começa na confirmação simulada, mesmo se a estação estiver desligada.
   A reconciliação de pagamento sem liberação efetiva ainda não está implementada.
-- Tokens no ambiente e banco local não são proteção contra outro processo do mesmo
-  usuário. O serviço protegido e o provisionamento seguro ainda precisam ser feitos.
+- O modo `--demo` continua usando tokens no ambiente e backend local. No modo
+  agente instalado, a credencial e a chave privada ficam em ProgramData com ACL
+  por SID; a interface recebe somente a chave pública. A comunicação usa desafios
+  e respostas assinadas, sem fallback para uma resposta HTTP não assinada.
 - Mudança de horário entre reinícios, suspensão, falha do aplicativo e tela
   minimizada precisam de validação no agente definitivo. Este protótipo não
   fornece garantia de revogação de acesso nesses cenários.
 
 ## Próxima etapa: proteção real no Windows Pro
 
-Separar o serviço Windows da interface e proteger a comunicação local com ACLs.
-O usuário de cliente será padrão, com administrador de manutenção separado.
+O serviço Windows e a comunicação local com ACLs já estão implementados na etapa
+experimental descrita em [windows-agent.md](docs/windows-agent.md). O usuário
+cliente é padrão, com administrador de manutenção separado. Falta implementar
+a revogação efetiva de acesso ao desktop e validar o conjunto em sessão gráfica.
 Não usar senha de administrador, desativar UAC ou interceptar Ctrl+Alt+Del.
 
 O Pro oferece Assigned Access; avaliar a configuração compatível com a build e

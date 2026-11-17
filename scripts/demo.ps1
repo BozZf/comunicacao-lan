@@ -35,7 +35,7 @@ try {
     $server.Refresh()
     if ($server.HasExited) { throw 'O servidor encerrou. Verifique se a porta 8787 já está em uso.' }
     Start-Process 'http://127.0.0.1:8787/'
-    & '.\target\debug\lan-station.exe'
+    & '.\target\debug\lan-station.exe' --demo
 } finally {
     if (-not $server.HasExited) { Stop-Process -Id $server.Id }
     Remove-Item Env:LAN_ADMIN_TOKEN, Env:LAN_STATION_TOKEN, Env:LAN_DEMO_PAYMENTS -ErrorAction SilentlyContinue

@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 comunicacao-lan = { path = "../.." }
+lan-transport = { path = "../transport" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

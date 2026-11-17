@@ -10,7 +10,7 @@ const SERVER: &str = "http://127.0.0.1:8787";
 enum Command { Buy(String) }
 enum Update {
     Catalog(Vec<Plan>),
-    Session(SessionView, Instant, Duration),
+    Session(SessionView, Instant, Duration, bool, Option<String>),
     Failure(String),
 }
 
@@ -18,7 +18,7 @@ fn send(sender: &SyncSender<Update>, update: Update) {
     let _ = sender.try_send(update);
 }
 
-fn worker(token: String, commands: Receiver<Command>, updates: SyncSender<Update>) {
+fn demo_worker(token: String, commands: Receiver<Command>, updates: SyncSender<Update>) {
     let client = match reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(1)).timeout(Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none()).no_proxy().build() {
@@ -39,7 +39,7 @@ fn worker(token: String, commands: Receiver<Command>, updates: SyncSender<Update
             .and_then(|r| r.error_for_status()).and_then(|r| r.json::<SessionView>()) {
             Ok(session) if session.machine_id == "PC-01" => {
                 let received = Instant::now();
-                send(&updates, Update::Session(session, received, received.duration_since(requested)));
+                send(&updates, Update::Session(session, received, received.duration_since(requested), true, None));
             }
             Ok(_) => send(&updates, Update::Failure("Resposta para outra máquina rejeitada.".into())),
             Err(_) => send(&updates, Update::Failure("Sem conexão. O tempo já autorizado continua contando localmente.".into())),
@@ -65,6 +65,57 @@ fn worker(token: String, commands: Receiver<Command>, updates: SyncSender<Update
     }
 }
 
+enum ConnectionMode {
+    Demo(String),
+    #[cfg(windows)]
+    Agent(String),
+}
+
+fn worker(mode: ConnectionMode, commands: Receiver<Command>, updates: SyncSender<Update>) {
+    match mode {
+        ConnectionMode::Demo(token) => demo_worker(token, commands, updates),
+        #[cfg(windows)]
+        ConnectionMode::Agent(public) => agent_worker(public, commands, updates),
+    }
+}
+
+#[cfg(windows)]
+fn agent_worker(public: String, commands: Receiver<Command>, updates: SyncSender<Update>) {
+    use lan_transport::{Action, Reply};
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(_) => { send(&updates, Update::Failure("Não foi possível iniciar o cliente do agente.".into())); return; }
+    };
+    let mut catalog_loaded = false;
+    loop {
+        if !catalog_loaded {
+            if let Ok(Reply::Catalog { plans }) = runtime.block_on(lan_transport::call(&public, Action::Catalog)) {
+                catalog_loaded = !plans.is_empty();
+                send(&updates, Update::Catalog(plans));
+            }
+        }
+        let requested = Instant::now();
+        match runtime.block_on(lan_transport::call(&public, Action::Status)) {
+            Ok(Reply::Status { session, online, message }) => {
+                let received = Instant::now();
+                send(&updates, Update::Session(session, received, received.duration_since(requested), online, message));
+            }
+            _ => send(&updates, Update::Failure("Agente indisponível ou assinatura inválida. Sem autorização nova.".into())),
+        }
+        match commands.recv_timeout(Duration::from_millis(500)) {
+            Ok(Command::Buy(plan_id)) => {
+                match runtime.block_on(lan_transport::call(&public, Action::Buy { plan_id })) {
+                    Ok(Reply::OrderCreated) => {},
+                    Ok(Reply::Failure { message }) => send(&updates, Update::Failure(message)),
+                    _ => send(&updates, Update::Failure("Agente não confirmou a criação da cobrança.".into())),
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {},
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
 struct StationApp {
     started: Instant,
     lease: Lease,
@@ -82,10 +133,10 @@ struct StationApp {
 }
 
 impl StationApp {
-    fn new(token: String) -> Self {
+    fn new(mode: ConnectionMode) -> Self {
         let (command_tx, command_rx) = mpsc::sync_channel(4);
         let (update_tx, update_rx) = mpsc::sync_channel(8);
-        std::thread::spawn(move || worker(token, command_rx, update_tx));
+        std::thread::spawn(move || worker(mode, command_rx, update_tx));
         Self {
             started: Instant::now(), lease: Lease::default(), updates: update_rx,
             commands: command_tx, catalog: Vec::new(), pending: None, qr: None,
@@ -99,7 +150,7 @@ impl StationApp {
             match update {
                 Update::Catalog(catalog) => self.catalog = catalog,
                 Update::Failure(error) => { self.connection_error = Some(error); self.waiting_for_order = false; }
-                Update::Session(session, received, round_trip) => {
+                Update::Session(session, received, round_trip, online, message) => {
                     self.lease.apply(&session, self.started.elapsed(), round_trip.saturating_add(received.elapsed()));
                     if session.revision > self.last_revision {
                         self.warning = None;
@@ -109,8 +160,8 @@ impl StationApp {
                         self.qr = session.pending_order.as_ref().and_then(|order| QrCode::new(order.qr_payload.as_bytes()).ok());
                     }
                     self.pending = session.pending_order;
-                    self.connection_error = None;
-                    self.last_contact = Some(received);
+                    self.connection_error = message;
+                    self.last_contact = online.then_some(received);
                     self.waiting_for_order = false;
                 }
             }
@@ -186,7 +237,7 @@ impl eframe::App for StationApp {
                     ui.add_space(20.0);
                     if let Some(error) = &self.connection_error { ui.colored_label(egui::Color32::YELLOW, error); }
                     ui.separator();
-                    ui.small("Protótipo local: fechar esta janela encerra a demonstração. Nenhuma configuração do Windows é alterada.");
+                    ui.small("Fechar esta janela não encerra um agente instalado. A proteção de acesso do Windows ainda não foi implementada.");
                 });
             });
         });
@@ -211,9 +262,21 @@ fn draw_qr(ui: &mut egui::Ui, qr: &QrCode) {
 }
 
 fn main() -> eframe::Result {
-    let token = match std::env::var("LAN_STATION_TOKEN") {
-        Ok(token) if token.len() >= 32 => token,
-        _ => { eprintln!("Defina LAN_STATION_TOKEN com a mesma credencial configurada no servidor."); return Ok(()); }
+    let mode = if std::env::args().any(|arg| arg == "--demo") {
+        match std::env::var("LAN_STATION_TOKEN") {
+            Ok(token) if token.len() >= 32 => ConnectionMode::Demo(token),
+            _ => { eprintln!("Defina LAN_STATION_TOKEN para a demonstração direta."); return Ok(()); }
+        }
+    } else {
+        #[cfg(windows)]
+        {
+            match lan_transport::installed_public_key() {
+                Ok(public) => ConnectionMode::Agent(public),
+                Err(error) => { eprintln!("{error}"); return Ok(()); }
+            }
+        }
+        #[cfg(not(windows))]
+        { eprintln!("Modo de serviço disponível somente no Windows. Use --demo para demonstração direta."); return Ok(()); }
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Comunicação LAN · demonstração")
@@ -222,6 +285,6 @@ fn main() -> eframe::Result {
     };
     eframe::run_native("Comunicação LAN", options, Box::new(move |creation| {
         creation.egui_ctx.set_visuals(egui::Visuals::dark());
-        Ok(Box::new(StationApp::new(token)))
+        Ok(Box::new(StationApp::new(mode)))
     }))
 }

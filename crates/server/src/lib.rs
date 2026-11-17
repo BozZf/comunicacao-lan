@@ -10,6 +10,7 @@ use comunicacao_lan::protocol::{demo_catalog, CreateOrder, OrderView, Overview, 
 use std::{sync::{Arc, Mutex}, time::{Instant, SystemTime, UNIX_EPOCH}};
 use store::{Store, StoreError};
 use subtle::ConstantTimeEq;
+use lan_transport::{Action, Identity, Reply, Request as RpcRequest, SignedReply};
 
 pub const ADDRESS: &str = "127.0.0.1:8787";
 const ORIGIN: &str = "http://127.0.0.1:8787";
@@ -19,6 +20,7 @@ pub struct Config {
     admin_token: String,
     station_token: String,
     demo_payments: bool,
+    agent_signer: Option<Identity>,
 }
 impl Config {
     pub fn new(admin_token: String, station_token: String, demo_payments: bool) -> Result<Self, &'static str> {
@@ -29,7 +31,11 @@ impl Config {
             || admin_token == station_token {
             return Err("Use dois tokens distintos, sem espaços, com pelo menos 32 caracteres ASCII.");
         }
-        Ok(Self { admin_token, station_token, demo_payments })
+        Ok(Self { admin_token, station_token, demo_payments, agent_signer: None })
+    }
+    pub fn with_agent_signer(mut self, secret: &str) -> Result<Self, String> {
+        self.agent_signer = Some(Identity::from_secret(secret)?);
+        Ok(self)
     }
 }
 
@@ -51,6 +57,7 @@ pub fn app(store: Store, config: Config) -> Router {
         .route("/api/catalog", get(catalog))
         .route("/api/session", get(session))
         .route("/api/orders", post(create_order))
+        .route("/api/agent/rpc", post(agent_rpc))
         .route("/api/admin/overview", get(overview))
         .route("/api/admin/orders/{id}/confirm-demo", post(confirm_demo))
         .layer(DefaultBodyLimit::max(1024))
@@ -135,6 +142,20 @@ async fn confirm_demo(State(state): State<Shared>, headers: HeaderMap, Path(id):
     with_store(&state, |store, now| store.confirm_demo(&id, now))?;
     Ok(StatusCode::NO_CONTENT)
 }
+async fn agent_rpc(State(state): State<Shared>, headers: HeaderMap, Json(request): Json<RpcRequest>) -> ApiResult<Json<SignedReply>> {
+    authorize(&headers, &state.config.station_token)?;
+    let signer = state.config.agent_signer.as_ref().ok_or(ApiError(StatusCode::SERVICE_UNAVAILABLE, "Assinatura do servidor não configurada."))?;
+    request.validate().map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Consulta inválida."))?;
+    let reply = match request.action {
+        Action::Status => Reply::Status { session: with_store(&state, |store, now| store.session(now))?, online: true, message: None },
+        Action::Catalog => Reply::Catalog { plans: demo_catalog() },
+        Action::Buy { plan_id } => {
+            with_store(&state, |store, now| store.create_order(&plan_id, now))?;
+            Reply::OrderCreated
+        }
+    };
+    Ok(Json(signer.sign(&request.nonce, reply).map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "Falha ao assinar resposta."))?))
+}
 async fn panel() -> Html<&'static str> { Html(include_str!("../web/index.html")) }
 async fn panel_js() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../web/panel.js"))
@@ -197,5 +218,21 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let response = app.oneshot(request("POST", "/api/admin/orders/fake/confirm-demo", ADMIN, "")).await.unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    #[tokio::test]
+    async fn agent_rpc_requires_signer_and_returns_a_nonce_bound_signature() {
+        let input = RpcRequest::new(Action::Status);
+        let body = serde_json::to_string(&input).unwrap();
+        let response = router(true).oneshot(request("POST", "/api/agent/rpc", STATION, &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let identity = Identity::generate();
+        let config = Config::new(ADMIN.into(), STATION.into(), true).unwrap()
+            .with_agent_signer(&identity.secret_hex()).unwrap();
+        let app = app(Store::from_connection(rusqlite::Connection::open_in_memory().unwrap()).unwrap(), config);
+        let response = app.oneshot(request("POST", "/api/agent/rpc", STATION, &body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let signed: SignedReply = serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+        let reply = lan_transport::verify(&identity.public_hex(), &input.nonce, signed).unwrap();
+        assert!(matches!(reply, Reply::Status { session: SessionView { remaining_seconds: 0, .. }, .. }));
     }
 }

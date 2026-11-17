@@ -2,9 +2,16 @@ use lan_server::{app, store::Store, Config, ADDRESS};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|arg| arg == "--generate-agent-key") {
+        let identity = lan_transport::Identity::generate();
+        println!("LAN_SERVER_SIGNING_KEY={}", identity.secret_hex());
+        println!("LAN_SERVER_PUBLIC_KEY={}", identity.public_hex());
+        return Ok(());
+    }
     let admin = std::env::var("LAN_ADMIN_TOKEN").map_err(|_| "Defina LAN_ADMIN_TOKEN.")?;
     let station = std::env::var("LAN_STATION_TOKEN").map_err(|_| "Defina LAN_STATION_TOKEN.")?;
-    let config = Config::new(admin, station, std::env::var("LAN_DEMO_PAYMENTS").as_deref() == Ok("1"))?;
+    let mut config = Config::new(admin, station, std::env::var("LAN_DEMO_PAYMENTS").as_deref() == Ok("1"))?;
+    if let Ok(secret) = std::env::var("LAN_SERVER_SIGNING_KEY") { config = config.with_agent_signer(&secret)?; }
     let path = std::env::var("LAN_DB").unwrap_or_else(|_| "lan-demo.sqlite3".into());
     let store = Store::open(path).map_err(|error| format!("Não foi possível abrir o banco: {error:?}"))?;
     let listener = tokio::net::TcpListener::bind(ADDRESS).await?;
