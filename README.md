@@ -1,6 +1,6 @@
 # comunicacao-lan
 
-Projeto em Rust para compra de tempo por Pix em uma lan house Windows 10/11.
+Projeto em Rust para compra de tempo por Pix em uma lan house Windows 10/11 Pro.
 
 ## Estado atual
 
@@ -67,16 +67,35 @@ e limitar operações; a interface nunca autoriza tempo nem recebe segredos Pix.
 8. Validar recuperação, perda de rede, queda de energia e manipulação de horário
    antes de qualquer piloto. Os testes atuais cobrem apenas o domínio em memória.
 
-## Integração Windows: decisão ainda aberta
+## Integração Windows: alvo Windows 10/11 Pro
 
 Não usar `LockWorkStation` como mecanismo completo de compra: o desbloqueio
 padrão exige login, e a função precisa de um processo no desktop interativo.
 Uma janela em tela cheia também não constitui proteção suficiente.
 
-É preciso confirmar a edição (Home, Pro, Enterprise/Education) e validar a
-estratégia de acesso em uma VM. Shell Launcher depende de edições específicas
-e, sozinho, não impede acesso a outros componentes. Não armazenar senha de
-administrador para automatizar login, nem desativar UAC ou Ctrl+Alt+Del.
+Edição confirmada: Pro. A versão/build exata deve ser registrada no piloto.
+Shell Launcher não é uma dependência viável no Pro: o recurso é destinado a
+Enterprise, Education e IoT Enterprise.
+
+O Pro oferece Assigned Access. Avaliar a experiência restrita e sua compatibilidade
+com a versão instalada e os aplicativos da lan house. O quiosque de aplicativo
+único é voltado a UWP/Edge; não substitui por si só a gestão de uma sessão com
+jogos e programas Win32. Uma lista estática de aplicativos permitidos também não
+resolve a mudança entre estado não pago e pago.
+
+A implementação seguirá serviço Rust separado da interface, conta padrão e
+controle de acesso validado em VM. O mecanismo final de transição entre compra
+e uso permanece em prototipagem; não prometer bloqueio seguro antes de validar:
+
+- Fechar a interface, usar atalhos ou abrir o Gerenciador de Tarefas não deve
+  liberar acesso sem sessão autorizada.
+- Pagamento confirmado deve permitir uso sem intervenção nem senha de administrador.
+- Expiração deve revogar acesso mesmo sem rede, mantendo um caminho de manutenção.
+- Reinício e falha do serviço não devem conceder tempo gratuito.
+- Renovação deve preservar o trabalho em andamento.
+
+Não armazenar senha de administrador para automatizar login, nem desativar UAC
+ou Ctrl+Alt+Del.
 
 Ao expirar, a integração deve revogar o acesso e retornar à compra, com política
 explícita para aplicativos abertos e dados do usuário. A conta do próximo cliente
@@ -87,6 +106,7 @@ Referências oficiais:
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-lockworkstation
 - https://learn.microsoft.com/en-us/windows/win32/services/interactive-services
 - https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/
+- https://learn.microsoft.com/en-us/windows/configuration/assigned-access/
 
 ## Próximas entregas
 
