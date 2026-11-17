@@ -107,7 +107,8 @@ fn bitmap(cache: &Cache) -> Result<HBITMAP> {
     pixels.fill(0xffffffff);
     if let Some(code) = code {
         let cells = code.width() + 8;
-        let scale = size / cells;
+        // O avatar do LogonUI pode ser circular: manter também a quiet zone no círculo.
+        let scale = (size * 2 / 3) / cells;
         let origin = (size - cells * scale) / 2;
         for y in 0..code.width() { for x in 0..code.width() {
             if code[(x, y)] == qrcode::Color::Dark {

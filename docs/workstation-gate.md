@@ -145,7 +145,8 @@ na lista `Authentication/Credential Providers`; nenhum filtro do Windows é inst
 ## Limites de validação
 
 Os testes automatizados verificam regras, assinaturas, acesso ao pipe, proteção
-de credenciais, construção da serialização e interfaces COM/bitmap. O teste do
+de credenciais, autenticação da serialização, ativação da DLL pelo COM registrado,
+callbacks entre apartamentos COM e interfaces/bitmap. O teste do
 serviço pode rodar em um Windows de CI sem desconectar o usuário do runner porque
 o SID cliente é uma conta temporária distinta.
 

@@ -37,16 +37,13 @@ try {
     $installed = $true
     $manifest = @{ client_user = $ClientUser; client_sid = $client.SID.Value; provider_clsid = $class } | ConvertTo-Json
     Set-Content (Join-Path $installDir 'workstation.json') -Value $manifest -Encoding UTF8
-    $null = New-Item -Path $classPath -Value 'Comunicação LAN' -Force
-    $null = New-Item -Path ($classPath + '\InprocServer32') -Value (Join-Path $installDir 'lan_logon.dll') -Force
-    $null = New-ItemProperty -Path ($classPath + '\InprocServer32') -Name ThreadingModel -PropertyType String -Value Apartment
-    $null = New-Item -Path $providerPath -Value 'Comunicação LAN - Pix de teste' -Force
+    & (Join-Path $PSScriptRoot 'register-logon.ps1')
     Write-Host 'Entrada Windows instalada para a nova conta padrão:' $ClientUser
     Write-Host 'Na tela de entrada, selecione a conta e a opção Comunicação LAN. A senha aleatória não é exibida nem entregue ao cliente.'
     Write-Host 'O pagamento é simulado pelo painel. Nenhum Pix real é cobrado.'
 } catch {
     Remove-Item $providerPath, $classPath -Recurse -Force -ErrorAction SilentlyContinue
-    if ($installed) { & (Join-Path $PSScriptRoot 'uninstall-agent.ps1') -RemoveFiles }
+    if ($installed) { & (Join-Path $PSScriptRoot 'uninstall-agent.ps1') -RemoveFiles -WorkstationCleanup }
     if ($created) { Remove-LocalUser -Name $ClientUser -ErrorAction SilentlyContinue }
     throw
 } finally {

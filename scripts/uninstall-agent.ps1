@@ -1,7 +1,8 @@
-param([switch]$RemoveFiles)
+param([switch]$RemoveFiles, [switch]$WorkstationCleanup)
 $ErrorActionPreference = 'Stop'
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Execute como administrador.' }
+if (-not $WorkstationCleanup -and (Test-Path (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'ComunicacaoLanAgent\workstation.json'))) { throw 'Use uninstall-workstation.ps1 para remover a entrada Windows antes do agente.' }
 $name = 'ComunicacaoLanAgent'
 $service = Get-Service $name -ErrorAction SilentlyContinue
 if ($service) {

@@ -28,6 +28,7 @@ jobs:
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
       - run: cargo +stable build -p lan-server -p lan-agent -p lan-logon -p lan-station
+      - run: cargo +stable build -p lan-logon --example activation
       - name: Test HTTP flow and restart
         shell: pwsh
         run: ./scripts/smoke.ps1
@@ -49,6 +50,7 @@ jobs:
             scripts/install-agent.ps1
             scripts/uninstall-agent.ps1
             scripts/install-workstation.ps1
+            scripts/register-logon.ps1
             scripts/uninstall-workstation.ps1
             docs/workstation-gate.md
             docs/windows-agent.md

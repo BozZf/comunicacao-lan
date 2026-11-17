@@ -85,6 +85,11 @@ try {
     Remove-Item Env:LAN_WINDOWS_CLIENT_PASSWORD -ErrorAction SilentlyContinue
     $installed = $true
     $status = Wait-Online
+    if ($WindowsGate) {
+        & './scripts/register-logon.ps1'
+        & './target/debug/examples/activation.exe'
+        if ($LASTEXITCODE -ne 0) { throw 'A DLL de entrada não ativou pelo COM registrado.' }
+    }
     if ($status.session.remaining_seconds -ne 0) { throw 'Agente iniciou com crédito indevido.' }
     $denied = Run-AsClient $agent @('--probe') $otherCredential
     if ($denied.ExitCode -eq 0) { throw 'Outra conta conseguiu acessar o pipe.' }
@@ -130,6 +135,7 @@ try {
                 }
             }
             if (-not $done) { throw 'Diagnóstico de autenticação não terminou.' }
+            Write-Host 'OK: serialização de entrada autenticou a conta dedicada no Windows.'
         } finally { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
     }
     $before = $status.session.remaining_seconds
@@ -145,8 +151,14 @@ try {
     Stop-Process -Id $serviceProcess.ProcessId -Force
     $recovered = Wait-Online
     if ($recovered.session.revision -ne 1 -or $recovered.session.remaining_seconds -gt $before) { throw 'Recuperação duplicou ou perdeu a revisão da sessão.' }
-    Write-Host 'OK: SCM/LocalService, ACL do pipe, segredo privado, RPC assinado, compra, contagem offline e recuperação após crash.'
+    if ($WindowsGate) { Write-Host 'OK: SCM/LocalSystem, provedor COM, autenticação da conta, RPC restrito, contagem offline e recuperação.' }
+    else { Write-Host 'OK: SCM/LocalService, ACL do pipe, segredo privado, RPC assinado, compra, contagem offline e recuperação após crash.' }
 } finally {
+    if ($WindowsGate) {
+        $class = '{E463AE81-2BA8-4FD3-948A-4BAF1809818E}'
+        Remove-Item ('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\' + $class) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item ('HKLM:\SOFTWARE\Classes\CLSID\' + $class) -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($installed) { & './scripts/uninstall-agent.ps1' -RemoveFiles }
     if ($server) { $server.Refresh(); if (-not $server.HasExited) { Stop-Process -Id $server.Id; $server.WaitForExit() } }
     Remove-LocalUser -Name $clientUser -ErrorAction SilentlyContinue

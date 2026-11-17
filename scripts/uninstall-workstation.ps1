@@ -16,5 +16,5 @@ if ($manifest) {
         else { Disable-LocalUser -Name $client.Name }
     }
 }
-& (Join-Path $PSScriptRoot 'uninstall-agent.ps1') -RemoveFiles:$RemoveFiles
+& (Join-Path $PSScriptRoot 'uninstall-agent.ps1') -RemoveFiles:$RemoveFiles -WorkstationCleanup
 Write-Host 'Provedor removido. A conta dedicada foi desativada ou removida conforme a opção selecionada.'
