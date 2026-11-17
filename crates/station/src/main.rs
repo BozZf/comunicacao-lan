@@ -231,7 +231,7 @@ impl eframe::App for StationApp {
                         let seconds = remaining.as_secs().saturating_add(u64::from(remaining.subsec_nanos() > 0));
                         ui.heading("Sessão autorizada");
                         ui.label(egui::RichText::new(format!("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)).size(40.0));
-                        ui.label("Renove antes de terminar para manter sua sessão em uso.");
+                        ui.label("Renove antes de terminar. Ao expirar, o Windows fecha a sessão: salve seu trabalho.");
                         if let Some(warning) = &self.warning { ui.colored_label(egui::Color32::YELLOW, warning); }
                         ui.add_space(16.0);
                         ui.separator();

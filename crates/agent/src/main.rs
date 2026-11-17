@@ -35,6 +35,22 @@ fn run() -> Result<(), String> {
             lan_agent::windows::dispatch(config)
         }
         #[cfg(windows)]
+        Some("--self-test-logon") => {
+            if !lan_agent::workstation::is_system() { return Err("Diagnóstico exige SYSTEM.".into()); }
+            let path = args.get(2).ok_or("Configuração privada ausente.")?;
+            let config: PrivateConfig = serde_json::from_slice(&std::fs::read(path).map_err(|_| "Configuração indisponível.")?).map_err(|_| "Configuração inválida.")?;
+            config.validate()?;
+            let public = Identity::from_secret(&config.agent_signing_secret)?.public_hex();
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| "Runtime indisponível.")?;
+            let reply = runtime.block_on(lan_transport::call(&public, lan_transport::Action::SerializeLogon { unlock: false }))?;
+            match reply {
+                lan_transport::Reply::Serialized { credentials } => lan_agent::workstation::verify_serialization(&config, &credentials)?,
+                _ => return Err("Entrada não autorizada para diagnóstico.".into()),
+            }
+            println!("Windows authentication verified");
+            Ok(())
+        }
+        #[cfg(windows)]
         Some("--watchdog") => {
             let path = args.get(2).ok_or("Configuração privada ausente.")?;
             let instance = args.get(3).ok_or("Instância de serviço ausente.")?.clone();

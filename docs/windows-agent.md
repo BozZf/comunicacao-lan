@@ -1,4 +1,8 @@
-# Agente Windows experimental
+# Agente Windows visual (LocalService)
+
+Este documento descreve o modo sem revogação de desktop. Para a implementação
+de bloqueio por sessão e compra na entrada do Windows, veja
+[workstation-gate.md](workstation-gate.md).
 
 Esta etapa separa o controle de autorização da janela de compra. O agente é um
 serviço Windows real, executado como LocalService, com SID próprio e recuperação

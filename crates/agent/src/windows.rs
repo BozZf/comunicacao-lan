@@ -154,7 +154,7 @@ pub async fn run(config: PrivateConfig, mut stop: watch::Receiver<bool>) -> Resu
             _ = &mut monitor => return Err("Monitor do servidor encerrou inesperadamente.".into()),
             _ = interval.tick() => {
                 if workstation {
-                    if !state.lock().await.authorized() { let _ = crate::workstation::disconnect_client(&client_sid); }
+                    if !state.lock().await.authorized() { let _ = crate::workstation::end_client_session(&client_sid); }
                     if let Some(child) = watchdog.as_mut() {
                         if child.try_wait().map_err(|_| "Falha ao verificar supervisor.")?.is_some() { watchdog = spawn()?; }
                     }
@@ -162,7 +162,7 @@ pub async fn run(config: PrivateConfig, mut stop: watch::Receiver<bool>) -> Resu
             }
             _ = stop.changed() => {
                 if workstation {
-                    let _ = crate::workstation::disconnect_client(&client_sid);
+                    let _ = crate::workstation::end_client_session(&client_sid);
                     if let Some(path) = private_path.as_ref() {
                         std::fs::write(path.with_file_name("maintenance.stop"), b"maintenance").map_err(|_| "Falha ao registrar manutenção.")?;
                     }

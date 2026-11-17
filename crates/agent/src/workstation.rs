@@ -5,10 +5,10 @@ use lan_transport::{Action, LogonSerialization, Reply};
 use std::{path::Path, time::{Duration, Instant}};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, LocalFree},
-    Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER, LogonUserW, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT,
         Authorization::ConvertSidToStringSidW,
         Authentication::Identity::{LsaConnectUntrusted, LsaDeregisterLogonProcess, LsaLookupAuthenticationPackage, LSA_STRING},
-        Credentials::CredProtectW,
+        Credentials::{CredProtectW, CredUnprotectW},
         Cryptography::{CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN}},
     System::{RemoteDesktop::*, Threading::{GetCurrentProcess, OpenProcessToken}},
 };
@@ -40,7 +40,7 @@ pub fn is_system() -> bool {
     system
 }
 
-fn client_sessions(sid: &str) -> Result<Vec<u32>, String> {
+fn client_sessions(sid: &str, active_only: bool) -> Result<Vec<u32>, String> {
     let (mut sessions, mut count) = (std::ptr::null_mut(), 0);
     if unsafe { WTSEnumerateSessionsW(std::ptr::null_mut(), 0, 1, &mut sessions, &mut count) } == 0 {
         return Err("Falha ao consultar sessões do Windows.".into());
@@ -48,7 +48,7 @@ fn client_sessions(sid: &str) -> Result<Vec<u32>, String> {
     let mut result = Vec::new();
     if count > 0 && !sessions.is_null() {
         for session in unsafe { std::slice::from_raw_parts(sessions, count as usize) } {
-            if session.SessionId == 0 || session.State != WTSActive { continue; }
+            if session.SessionId == 0 || (active_only && session.State != WTSActive) { continue; }
             let mut token = std::ptr::null_mut();
             if unsafe { WTSQueryUserToken(session.SessionId, &mut token) } == 0 { continue; }
             let matches = token_sid(token).as_deref() == Some(sid);
@@ -61,9 +61,9 @@ fn client_sessions(sid: &str) -> Result<Vec<u32>, String> {
 }
 
 /// Atua somente sobre o SID provisionado; jamais sobre a sessão de manutenção.
-pub fn disconnect_client(sid: &str) -> Result<(), String> {
-    for session in client_sessions(sid)? {
-        if unsafe { WTSDisconnectSession(std::ptr::null_mut(), session, 0) } == 0 {
+pub fn end_client_session(sid: &str) -> Result<(), String> {
+    for session in client_sessions(sid, false)? {
+        if unsafe { WTSLogoffSession(std::ptr::null_mut(), session, 0) } == 0 {
             return Err("Windows recusou o bloqueio da sessão de cliente.".into());
         }
     }
@@ -71,13 +71,13 @@ pub fn disconnect_client(sid: &str) -> Result<(), String> {
 }
 
 fn warn_client(sid: &str, seconds: u64) {
-    let Ok(sessions) = client_sessions(sid) else { return; };
-    let title: Vec<u16> = "Comunicação LAN".encode_utf16().collect();
-    let text: Vec<u16> = format!("Seu tempo acaba em {seconds} segundos. Renove para continuar. Ao terminar, o Windows bloqueará a sessão sem fechar os programas.").encode_utf16().collect();
+    let Ok(sessions) = client_sessions(sid, true) else { return; };
+    let mut title: Vec<u16> = "Comunicação LAN".encode_utf16().collect();
+    let mut text: Vec<u16> = format!("Seu tempo acaba em {seconds} segundos. Renove para continuar. Ao terminar, o Windows encerrará a sessão e fechará os programas. Salve seu trabalho.").encode_utf16().collect();
     for session in sessions {
         let mut response = 0;
-        unsafe { WTSSendMessageW(std::ptr::null_mut(), session, title.as_ptr(), (title.len() * 2) as u32,
-            text.as_ptr(), (text.len() * 2) as u32, 0x30, 8, &mut response, 0); }
+        unsafe { WTSSendMessageW(std::ptr::null_mut(), session, title.as_mut_ptr(), (title.len() * 2) as u32,
+            text.as_mut_ptr(), (text.len() * 2) as u32, 0x30, 8, &mut response, 0); }
     }
 }
 
@@ -169,6 +169,42 @@ pub fn serialize(config: &PrivateConfig, unlock: bool) -> Result<LogonSerializat
     Ok(LogonSerialization { buffer_hex: hex::encode(packed.as_slice()), package })
 }
 
+/// Diagnóstico SYSTEM: valida o blob sem iniciar desktop nem revelar a senha.
+/// Não equivale ao ciclo gráfico do LogonUI, que exige uma VM interativa.
+pub fn verify_serialization(config: &PrivateConfig, serialized: &LogonSerialization) -> Result<(), String> {
+    if !is_system() { return Err("Diagnóstico de autenticação exige SYSTEM.".into()); }
+    let bytes = Zeroizing::new(hex::decode(&serialized.buffer_hex).map_err(|_| "Serialização inválida.")?);
+    if bytes.len() < std::mem::size_of::<Unlock>() { return Err("Serialização incompleta.".into()); }
+    let read = |offset: usize| -> Result<Zeroizing<Vec<u16>>, String> {
+        let length = u16::from_le_bytes(bytes.get(offset..offset + 2).ok_or("Campo inválido.")?.try_into().map_err(|_| "Campo inválido.")?) as usize;
+        let p = offset + std::mem::offset_of!(Unicode, buffer);
+        let pointer = usize::from_le_bytes(bytes.get(p..p + std::mem::size_of::<usize>()).ok_or("Ponteiro inválido.")?.try_into().map_err(|_| "Ponteiro inválido.")?);
+        if length % 2 != 0 || pointer < std::mem::size_of::<Unlock>() { return Err("Campo inválido.".into()); }
+        let slice = bytes.get(pointer..pointer.checked_add(length).ok_or("Campo inválido.")?).ok_or("Campo inválido.")?;
+        let mut wide = Zeroizing::new(slice.chunks_exact(2).map(|part| u16::from_le_bytes([part[0], part[1]])).collect::<Vec<_>>());
+        wide.push(0);
+        Ok(wide)
+    };
+    let user = read(std::mem::offset_of!(Interactive, user))?;
+    let domain = read(std::mem::offset_of!(Interactive, domain))?;
+    let mut protected = read(std::mem::offset_of!(Interactive, password))?;
+    let mut length = 0;
+    unsafe { CredUnprotectW(1, protected.as_mut_ptr(), protected.len() as u32, std::ptr::null_mut(), &mut length); }
+    if length == 0 || length > 16384 { return Err("Windows não reconheceu a proteção da senha.".into()); }
+    let mut clear = Zeroizing::new(vec![0u16; length as usize]);
+    if unsafe { CredUnprotectW(1, protected.as_mut_ptr(), protected.len() as u32, clear.as_mut_ptr(), &mut length) } == 0 {
+        return Err("Windows recusou a proteção da senha.".into());
+    }
+    let mut token = std::ptr::null_mut();
+    if unsafe { LogonUserW(user.as_ptr(), domain.as_ptr(), clear.as_ptr(), LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &mut token) } == 0 {
+        return Err("Windows recusou a credencial serializada.".into());
+    }
+    let matches = token_sid(token).as_deref() == Some(config.client_sid.as_str());
+    unsafe { CloseHandle(token); }
+    if !matches { return Err("Serialização aponta para outra conta.".into()); }
+    Ok(())
+}
+
 /// Processo separado: mantém a contagem mesmo se o processo do serviço falhar.
 pub async fn watchdog(config: PrivateConfig, private_path: &Path, instance: String) -> Result<(), String> {
     if config.workstation.is_none() || !is_system() { return Err("Supervisor exige modo de entrada Windows e SYSTEM.".into()); }
@@ -198,11 +234,11 @@ pub async fn watchdog(config: PrivateConfig, private_path: &Path, instance: Stri
                 }
             }
             _ = interval.tick() => {
-                if marker.exists() { disconnect_client(&config.client_sid)?; return Ok(()); }
+                if marker.exists() { end_client_session(&config.client_sid)?; return Ok(()); }
                 let now = started.elapsed();
                 if lease.remaining(now).is_zero() {
                     // Falha de API não encerra o supervisor: repetir no próximo tick.
-                    let _ = disconnect_client(&config.client_sid);
+                    let _ = end_client_session(&config.client_sid);
                 } else if let Some(seconds) = lease.warning(now) { warn_client(&config.client_sid, seconds); }
             }
         }

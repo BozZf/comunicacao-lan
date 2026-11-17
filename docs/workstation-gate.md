@@ -8,22 +8,22 @@ teste e estado da cobrança. Quando o backend confirma o pagamento simulado,
 o provedor solicita a entrada automática ao Windows. O serviço só libera uma
 serialização de credenciais se houver tempo autorizado vigente.
 
-Ao terminar o tempo, `WTSDisconnectSession` desconecta a sessão da conta dedicada.
-Os programas permanecem abertos na sessão desconectada; a entrada seguinte passa
-novamente pela autenticação do Windows. Fechar o acompanhamento gráfico não
+Ao terminar o tempo, `WTSLogoffSession` encerra a sessão da conta dedicada e fecha seus programas.
+Os avisos pedem para salvar o trabalho. Renovar antes do fim mantém a sessão
+aberta; depois de expirar, a nova compra passa novamente pela autenticação do Windows. Fechar o acompanhamento gráfico não
 desativa o serviço nem impede a expiração. A conta de manutenção não é alvo do
 bloqueio, pois as sessões são identificadas pelo SID exato da conta cliente.
 
 O agente neste modo roda como **LocalSystem**, necessário para consultar tokens
-das sessões e desconectá-las. Ele não abre janelas privilegiadas no desktop do
+das sessões e encerrá-las. Ele não abre janelas privilegiadas no desktop do
 cliente. O acompanhamento nativo continua como usuário padrão; a compra antes
 da entrada acontece no LogonUI do Windows, por uma DLL Rust COM.
 
 Um supervisor não interativo, em processo separado, mantém o prazo monotônico
-recebido do agente e repete o bloqueio a cada 250 ms quando expira. Assim, o
+recebido do agente e repete a revogação de acesso a cada 250 ms quando expira. Assim, o
 reinício do serviço não depende de a janela do cliente estar aberta. Ao recuperar
 o serviço, o supervisor anterior reconhece a nova instância assinada e encerra.
-Uma parada administrativa sinaliza manutenção em arquivo protegido e desconecta
+Uma parada administrativa sinaliza manutenção em arquivo protegido e encerra
 a sessão cliente antes de encerrar os supervisores.
 
 ## Pix provisório
@@ -109,9 +109,9 @@ a sessão administrativa que o mantém aberto. Nada aqui processa Pix real.
 6. Na sessão cliente, abra um programa e observe o acompanhamento de tempo.
 7. Renove pelo acompanhamento e confirme no painel; o prazo deve aumentar sem
    desconectar nem fechar o programa.
-8. Deixe terminar. O Windows deve desconectar a conta cliente e exigir nova entrada;
-   a opção Comunicação LAN deve permitir uma nova compra. Os programas devem
-   permanecer na sessão desconectada.
+8. Deixe terminar. O Windows deve encerrar a sessão da conta cliente e exigir nova entrada;
+   a opção Comunicação LAN deve permitir uma nova compra. Os programas devem ser fechados.
+   Renovações antes do fim não devem encerrar a sessão.
 9. Repita fechando o acompanhamento antes do fim, sem backend e após falha do
    serviço. O prazo autorizado não deve aumentar. Sem autorização recuperável,
    o comportamento esperado é manter a entrada bloqueada.
@@ -137,7 +137,7 @@ Entre pela conta administrativa Microsoft. Remova apenas o componente do projeto
 ```
 
 Por padrão, a conta dedicada é desativada e as identidades privadas são preservadas.
-Os dados do perfil e programas abertos não são apagados pelo instalador. Revise os
+O instalador não apaga os dados persistidos do perfil. A expiração/parada do controle fecha programas da conta cliente. Revise os
 dados antes de remover a conta. Para recuperação offline, as únicas chaves do
 provedor são o CLSID `{E463AE81-2BA8-4FD3-948A-4BAF1809818E}` em `Classes/CLSID` e
 na lista `Authentication/Credential Providers`; nenhum filtro do Windows é instalado.
@@ -152,7 +152,7 @@ o SID cliente é uma conta temporária distinta.
 O ciclo real LogonUI → autenticação → desktop → expiração depende de sessão
 interativa Windows Pro. Não deve ser declarado validado apenas porque compilou.
 Também precisam ser exercitados suspensão, múltiplos monitores, jogos, drivers,
-reinício de energia e limpeza de perfil entre clientes. O backend ainda precisa
+reinício de energia e limpeza de perfil entre clientes. O perfil ainda é compartilhado: arquivos e logins persistidos por aplicativos não são apagados automaticamente nesta versão. O backend ainda precisa
 de reconciliação de uma cobrança paga cuja entrada falhe; não existe estorno real
 porque nenhum pagamento real ocorre nesta versão.
 
@@ -160,4 +160,4 @@ Referências oficiais:
 
 - https://learn.microsoft.com/en-us/windows/win32/secauthn/credential-providers-in-windows
 - https://learn.microsoft.com/en-us/windows/win32/api/credentialprovider/nf-credentialprovider-icredentialprovider-getcredentialcount
-- https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtsdisconnectsession
+- https://learn.microsoft.com/en-us/windows/win32/api/wtsapi32/nf-wtsapi32-wtslogoffsession

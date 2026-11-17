@@ -2,7 +2,7 @@
 use comunicacao_lan::protocol::{demo_catalog, OrderView, Plan};
 use lan_transport::{Action, PublicConfig, Reply};
 use std::{ffi::c_void, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}}, time::{Duration, Instant}};
-use windows::{core::*, Win32::{Foundation::*, Graphics::Gdi::*, System::{Com::*, LibraryLoader::*}, UI::Shell::*}};
+use windows::{core::*, Win32::{Foundation::*, Graphics::Gdi::*, System::{Com::{*, Marshal::*, StructuredStorage::*}, LibraryLoader::*}, UI::Shell::*}};
 use zeroize::Zeroizing;
 
 pub const PROVIDER_CLSID: GUID = GUID::from_u128(0xe463ae81_2ba8_4fd3_948a_4baf1809818e);
@@ -365,7 +365,7 @@ impl ICredentialProviderCredential_Impl for Credential_Impl {
         Ok(())
     }
     fn ReportResult(&self, status: NTSTATUS, _substatus: NTSTATUS, text: *mut PWSTR, icon: *mut CREDENTIAL_PROVIDER_STATUS_ICON) -> Result<()> {
-        if !text.is_null() { unsafe { *text = if status.0 < 0 { string("O Windows recusou a entrada. Procure o atendente; nenhum crédito adicional foi consumido.")? } else { PWSTR::null() }; } }
+        if !text.is_null() { unsafe { *text = if status.0 < 0 { string("O Windows recusou a entrada. Procure o atendente; verifique a credencial e o prazo da cobrança.")? } else { PWSTR::null() }; } }
         if !icon.is_null() { unsafe { *icon = if status.0 < 0 { CPSI_ERROR } else { CPSI_NONE }; } }
         Ok(())
     }

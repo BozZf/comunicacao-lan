@@ -110,6 +110,28 @@ try {
     # Cada probe é um processo novo. O prazo pertence ao serviço, não à interface.
     $deniedCredentials = Run-AsClient $agent @('--probe', '--check-logon-denied') $credential
     if ($deniedCredentials.ExitCode -ne 0) { throw 'Serialização reservada ao Windows acessível ao cliente.' }
+    if ($WindowsGate) {
+        $taskName = 'LanAuthTest-' + $suffix
+        try {
+            $privatePath = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ComunicacaoLanAgent\private.json'
+            $taskAction = New-ScheduledTaskAction -Execute $agent -Argument ('--self-test-logon "' + $privatePath + '"')
+            $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+            $null = Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $taskPrincipal
+            $started = Get-Date
+            Start-ScheduledTask -TaskName $taskName
+            $done = $false
+            for ($i = 0; $i -lt 100; $i++) {
+                Start-Sleep -Milliseconds 300
+                $info = Get-ScheduledTaskInfo -TaskName $taskName
+                if ($info.LastRunTime -ge $started.AddSeconds(-2) -and (Get-ScheduledTask -TaskName $taskName).State -ne 'Running') {
+                    if ($info.LastTaskResult -ne 0) { throw ('Serialização não autenticou no Windows: código ' + $info.LastTaskResult) }
+                    $done = $true
+                    break
+                }
+            }
+            if (-not $done) { throw 'Diagnóstico de autenticação não terminou.' }
+        } finally { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+    }
     $before = $status.session.remaining_seconds
     Stop-Process -Id $server.Id
     $server.WaitForExit()
