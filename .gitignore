@@ -1,1 +1,14 @@
 /target/
+
+# Segredos locais, variáveis de ambiente e certificados TLS
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+secrets/
+config.local.*
+
